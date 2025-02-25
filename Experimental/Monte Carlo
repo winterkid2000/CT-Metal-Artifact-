@@ -1,0 +1,93 @@
+%% Metal Artifact Reduction using Monte Carlo Scatter Correction
+
+clearvars;
+clc;
+
+% Define phantom (Shepp-Logan Phantom with metal)
+e = [1   0.920  0.690   0      0        90
+    -0.8  0.874  0.6624  0     -0.0184  90
+    -0.2  0.310  0.1100  0.22   0       72
+    -0.2  0.410  0.1600 -0.22   0      108 
+     0.1  0.250  0.2100  0      0.35    90 
+     0.1  0.0460 0.046   0      0.1      0 
+     0.1  0.0460 0.046   0     -0.1      0 
+     0.1  0.0460 0.023  -0.08  -0.605    0 
+     0.1  0.0230 0.023   0     -0.605    0 
+     0.1  0.0460 0.023   0.06  -0.605   90 
+     10   0.018  0.018   0      0.35     0
+     10   0.018  0.018  -0.22   0       90
+     10   0.018  0.018   0.22   0       90
+     10   0.018  0.018   0     -0.35     0];
+
+theta1 = 0:1:179;
+
+% Create Phantom Image
+Pori = phantom(e, 256);
+figure, imshow(Pori), title('Original with Metal Non-Recon');
+
+% Radon Transform
+[R, xp] = radon(Pori, theta1);
+figure, imshow(R, [], 'XData', theta1, 'YData', xp, 'InitialMagnification', 'fit');
+xlabel('\theta (degrees)'), ylabel('x''');
+colormap(gray), title('Shepp Logan Original');
+
+XD = double(Pori);
+
+% Segment Metal Areas
+I55 = XD > 1.3;  % Metal region
+I66 = XD <= 1.3; % Non-metal region
+I5 = I55 .* XD;
+I6 = I66 .* XD;
+
+% Apply Radon Transform to Segmented Images
+[R2, xp2] = radon(I5, theta1);
+[R3, xp3] = radon(I6, theta1);
+figure, imshow(I5), title('Metal Original');
+
+% Compute Scatter Distribution Using Monte Carlo
+scatter_map = monte_carlo_scatter_estimation(R2);
+
+% Apply Scatter Correction
+sinoNew = scatter_correction(R, scatter_map);
+
+% Reconstruct Image Using Inverse Radon Transform
+PNew = iradon(sinoNew, theta1, 'linear', 'Shepp-Logan', 0.9);
+figure, imshow(PNew), title('Metal Artifacts Reconstruction with Scatter Correction');
+
+%% Monte Carlo Scatter Estimation Function
+function scatter_map = monte_carlo_scatter_estimation(metal_sino)
+    % Initialize scatter map with zeros
+    scatter_map = zeros(size(metal_sino));
+    
+    % Get dimensions
+    [rows, cols] = size(metal_sino);
+
+    % Monte Carlo simulation for scatter estimation
+    num_samples = 100; % Number of samples for simulation
+    rng(42); % Random seed for reproducibility
+
+    for i = 1:cols
+        metal_idx = find(metal_sino(:, i) > 0); % Metal affected indices
+        
+        if ~isempty(metal_idx)
+            for j = 1:num_samples
+                % Generate random scatter noise following Gaussian distribution
+                scatter_noise = abs(normrnd(0.05, 0.02, length(metal_idx), 1));
+                
+                % Add scatter effect
+                scatter_map(metal_idx, i) = scatter_map(metal_idx, i) + scatter_noise;
+            end
+            % Average the scatter effect
+            scatter_map(metal_idx, i) = scatter_map(metal_idx, i) / num_samples;
+        end
+    end
+end
+
+%% Scatter Correction Function
+function sino_corrected = scatter_correction(sino, scatter_map)
+    % Apply scatter correction to sinogram
+    sino_corrected = sino - scatter_map;
+    
+    % Ensure no negative values
+    sino_corrected(sino_corrected < 0) = 0;
+end
